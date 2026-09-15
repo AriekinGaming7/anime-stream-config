@@ -1,0 +1,36 @@
+name: Auto Update Streaming Mirrors
+
+on:
+  schedule:
+    # Runs every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub Actions tab
+
+jobs:
+  update-mirrors:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Mirror Prober & Update Manifest
+        run: node scripts/check_and_update_manifest.js
+
+      - name: Commit & Push Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          if git diff --staged --quiet; then
+            echo "No mirror changes detected. Manifest is already up to date."
+          else
+            git commit -m "🤖 Auto-update streaming mirrors [skip ci]"
+            git push
+          fi
