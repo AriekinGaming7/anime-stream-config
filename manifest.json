@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "megavid_seeds": [
+    "https://megavid.buzz"
+  ],
+  "anikoto_mirrors": [
+    "https://anikoto.cz",
+    "https://anikototv.to",
+    "https://anikoto.me",
+    "https://anikoto.net"
+  ],
+  "sub_provider_param": "1",
+  "dub_provider_param": "1"
+}
