@@ -1,8 +1,12 @@
 /**
- * Automated Domain Health Checker & Manifest Generator
+ * Automated Domain Health Checker, Crawler & Manifest Generator
  * 
- * Periodically probes AniKoto, MegaVid, and community mirrors,
- * tests stream resolution, and generates a verified manifest.json.
+ * 1. Crawls official domain hubs (e.g. anikoto.site).
+ * 2. Resolves HTTP 301/302 redirectors (e.g. anikoto.bz -> anikototv.to).
+ * 3. Sweeps known TLD mirror candidates.
+ * 4. Verifies genuine search & stream extraction on every discovered server.
+ * 5. Prunes dead / offline / parked domains.
+ * 6. Generates a fresh, verified manifest.json for the Android app.
  */
 
 const https = require('https');
@@ -10,7 +14,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-// Timeout for HTTP checks (ms)
+// Timeout for HTTP requests (ms)
 const TIMEOUT_MS = 6000;
 
 function httpRequest(url, options = {}) {
@@ -54,39 +58,86 @@ function httpRequest(url, options = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 1. ANIKOTO MIRROR PROBER (Dead Link Pruning)
+// 1. AUTOMATED DOMAIN CRAWLER & REDIRECT RESOLVER
 // ═══════════════════════════════════════════════════════════════
 
-const ANIKOTO_CANDIDATES = [
+const OFFICIAL_HUBS = [
+    'https://anikoto.site'
+];
+
+async function crawlOfficialHubs() {
+    const discovered = new Set();
+    console.log('[Crawler] Querying official domain hubs...');
+
+    for (const hub of OFFICIAL_HUBS) {
+        try {
+            const res = await httpRequest(hub);
+            if (res.status === 200 && res.body) {
+                // Match links like https://anikoto... or https://anikototv...
+                const matches = res.body.match(/https?:\/\/(?:[a-zA-Z0-9-]+\.)?anikoto[a-zA-Z0-9-]*\.[a-z]{2,}(?:\/)?/gi) || [];
+                for (const m of matches) {
+                    const clean = m.trim().replace(/\/+$/, '');
+                    if (!clean.includes('site') && !clean.includes('cloudflare')) {
+                        discovered.add(clean);
+                    }
+                }
+                console.log(`  🔍 Hub ${hub} revealed:`, Array.from(discovered));
+            }
+        } catch (e) {
+            console.log(`  ⚠️ Hub ${hub} failed:`, e.message);
+        }
+    }
+    return Array.from(discovered);
+}
+
+// Seed candidate pools (base TLD sweep)
+const BASE_ANIKOTO_CANDIDATES = [
     'https://anikoto.cz',
     'https://anikototv.to',
     'https://anikoto.me',
     'https://anikoto.net',
+    'https://anikototv.se',
     'https://anikoto.tv',
     'https://anikoto.bz',
-    'https://anikoto.site',
     'https://anikoto.cc',
-    'https://anikoto.is'
+    'https://anikoto.is',
+    'https://anikoto.top',
+    'https://anikoto.app',
+    'https://anikoto.io',
+    'https://anikoto.world'
 ];
 
-async function verifyAniKotoMirror(mirror) {
+async function verifyAniKotoMirror(mirror, candidateSet) {
     const cleanMirror = mirror.trim().replace(/\/+$/, '');
     console.log(`[AniKoto] Testing ${cleanMirror}...`);
 
     try {
-        // Step 1: Probe filter search with a known active anime title
         const searchRes = await httpRequest(`${cleanMirror}/filter?keyword=naruto`, {
             headers: { 'Referer': `${cleanMirror}/home` }
         });
+
+        // Check for 301/302 redirects to automatically discover destination domain
+        if ([301, 302, 307, 308].includes(searchRes.status) && searchRes.headers && searchRes.headers.location) {
+            try {
+                const targetUrl = new URL(searchRes.headers.location, cleanMirror);
+                const targetOrigin = targetUrl.origin;
+                console.log(`  ↪️ Redirect: ${cleanMirror} -> ${targetOrigin}`);
+                if (!candidateSet.has(targetOrigin)) {
+                    candidateSet.add(targetOrigin);
+                }
+            } catch (_) {}
+            console.log(`  ❌ Redirector (not direct endpoint): ${cleanMirror} -> Pruned`);
+            return null;
+        }
 
         if (searchRes.status !== 200 || !searchRes.body || searchRes.body.length < 500) {
             console.log(`  ❌ Dead/Blocked: ${cleanMirror} (HTTP ${searchRes.status}) -> Pruned`);
             return null;
         }
 
-        // Verify it returns real functional anime card elements
+        // Verify genuine functional anime cards returned
         if (!searchRes.body.includes('data-tip=') && !searchRes.body.includes('/watch/')) {
-            console.log(`  ❌ Invalid Payload: ${cleanMirror} -> Pruned`);
+            console.log(`  ❌ Invalid Payload / Parked: ${cleanMirror} -> Pruned`);
             return null;
         }
 
@@ -105,7 +156,9 @@ async function verifyAniKotoMirror(mirror) {
 const MEGAVID_CANDIDATES = [
     'https://megavid.buzz',
     'https://megavid.cc',
-    'https://megavid.to'
+    'https://megavid.to',
+    'https://megavid.pro',
+    'https://megavid.net'
 ];
 
 async function verifyMegaVidSeed(seed) {
@@ -120,8 +173,9 @@ async function verifyMegaVidSeed(seed) {
             }
         });
 
-        if (res.status === 200 || (res.body && res.body.startsWith('{'))) {
-            console.log(`  ✅ Healthy: ${cleanSeed} (API responsive)`);
+        // Must return valid JSON containing "status" and "source"
+        if (res.status === 200 && res.body && res.body.includes('"status"') && res.body.includes('"source"')) {
+            console.log(`  ✅ Healthy: ${cleanSeed} (API responsive & payload verified)`);
             return cleanSeed;
         }
 
@@ -139,24 +193,47 @@ async function verifyMegaVidSeed(seed) {
 
 async function main() {
     console.log('====================================================');
-    console.log('Anime Stream Mirrors Automated Health Checker');
+    console.log('Anime Stream Mirrors Automated Health & Discovery Crawler');
     console.log(`Timestamp: ${new Date().toISOString()}`);
     console.log('====================================================\n');
 
-    // Run probes in parallel
-    const [aniKotoResults, megaVidResults] = await Promise.all([
-        Promise.all(ANIKOTO_CANDIDATES.map(m => verifyAniKotoMirror(m))),
-        Promise.all(MEGAVID_CANDIDATES.map(s => verifyMegaVidSeed(s)))
-    ]);
+    // Step 1: Crawl official hubs for newly published domains
+    const crawledDomains = await crawlOfficialHubs();
 
-    const liveAniKoto = aniKotoResults.filter(Boolean);
-    const liveMegaVid = megaVidResults.filter(Boolean);
+    // Step 2: Combine base candidate pool with crawled domains
+    const candidateSet = new Set([...BASE_ANIKOTO_CANDIDATES, ...crawledDomains]);
 
-    console.log('\n--- Probe Summary ---');
-    console.log(`AniKoto: ${liveAniKoto.length}/${ANIKOTO_CANDIDATES.length} mirrors operational`);
-    console.log(`MegaVid: ${liveMegaVid.length}/${MEGAVID_CANDIDATES.length} seeds operational\n`);
+    // Step 3: Run probes across all candidates (and detect any new redirects)
+    const testedCandidates = Array.from(candidateSet);
+    const aniKotoResults = await Promise.all(
+        testedCandidates.map(m => verifyAniKotoMirror(m, candidateSet))
+    );
 
-    // Ensure we always have at least fallback mirrors if all networks are down
+    // If new redirects were discovered during probe that weren't tested, test them
+    for (const discovered of candidateSet) {
+        if (!testedCandidates.includes(discovered)) {
+            console.log(`[Discovery] Testing newly redirected mirror: ${discovered}...`);
+            const res = await verifyAniKotoMirror(discovered, candidateSet);
+            if (res) aniKotoResults.push(res);
+        }
+    }
+
+    // Step 4: Test MegaVid seeds
+    const megaVidResults = await Promise.all(
+        MEGAVID_CANDIDATES.map(s => verifyMegaVidSeed(s))
+    );
+
+    const liveAniKoto = [...new Set(aniKotoResults.filter(Boolean))];
+    const liveMegaVid = [...new Set(megaVidResults.filter(Boolean))];
+
+    console.log('\n--- Discovery & Health Summary ---');
+    console.log(`AniKoto: ${liveAniKoto.length} operational mirrors discovered & verified:`);
+    liveAniKoto.forEach(m => console.log(`  - ${m}`));
+    console.log(`MegaVid: ${liveMegaVid.length} operational seeds verified:`);
+    liveMegaVid.forEach(s => console.log(`  - ${s}`));
+    console.log('');
+
+    // Fail-safe fallbacks if all networks temporarily fail
     const finalAniKoto = liveAniKoto.length > 0 ? liveAniKoto : ['https://anikoto.cz', 'https://anikototv.to'];
     const finalMegaVid = liveMegaVid.length > 0 ? liveMegaVid : ['https://megavid.buzz'];
 
@@ -174,7 +251,6 @@ async function main() {
     const outPath = path.join(outDir, 'manifest.json');
     fs.writeFileSync(outPath, JSON.stringify(manifest, null, 2) + '\n');
     console.log(`✅ Generated manifest.json successfully at: ${outPath}`);
-    console.log(JSON.stringify(manifest, null, 2));
 }
 
 main().catch(err => {
