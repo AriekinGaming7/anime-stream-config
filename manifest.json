@@ -5,13 +5,12 @@
   ],
   "anikoto_mirrors": [
     "https://anikoto.cz",
-    "https://anikototv.to",
     "https://anikoto.me",
     "https://anikoto.net",
     "https://anikototv.se"
   ],
   "sub_provider_param": "1",
   "dub_provider_param": "1",
-  "updated_at_epoch": 1794442666303,
-  "updated_at_utc": "2026-11-12T00:17:46.303Z"
+  "updated_at_epoch": 1794495189851,
+  "updated_at_utc": "2026-11-12T14:53:09.851Z"
 }
