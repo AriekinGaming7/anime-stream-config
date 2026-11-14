@@ -4,6 +4,7 @@
     "https://megavid.buzz"
   ],
   "anikoto_mirrors": [
+    "https://anikoto.cz",
     "https://anikoto.me",
     "https://anikoto.net",
     "https://anikototv.se",
@@ -11,6 +12,6 @@
   ],
   "sub_provider_param": "1",
   "dub_provider_param": "1",
-  "updated_at_epoch": 1794634898980,
-  "updated_at_utc": "2026-11-14T05:41:38.980Z"
+  "updated_at_epoch": 1794662074454,
+  "updated_at_utc": "2026-11-14T13:14:34.454Z"
 }
